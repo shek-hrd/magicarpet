@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>BTC Price Streaming → Progressive Curved Line Demo</title>
+  <style>
+    body{font-family:system-ui,Segoe UI,Roboto,Arial;margin:0;background:#0b1020;color:#e6eef8}
+    header{padding:12px;display:flex;gap:8px;align-items:center;background:#071028}
+    button,input,select{padding:8px;border-radius:8px;border:1px solid #234; background:#0b2340;color:inherit}
+    #canvasWrap{position:relative;height:72vh;background:#081026}
+    canvas{width:100%;height:100%;display:block}
+    .controls{padding:12px;display:flex;gap:8px;flex-wrap:wrap}
+    .info{font-size:13px;opacity:0.9}
+  </style>
+</head>
+<body>
+  <header>
+    <strong>BTC Streaming → Progressive curves</strong>
+    <div style="flex:1"></div>
+    <div class="info">Demo emulates server-side progressive streaming & multiresolution encoding.</div>
+  </header>
+  <div class="controls">
+    <label>Load sample CSV URL: <input id="csvUrl" size="60" value="" placeholder="Paste CSV URL (or leave blank to use embedded sample)"></label>
+    <button id="loadBtn">Load & Start</button>
+    <label>Upload CSV: <input id="fileInput" type="file" accept=".csv"></label>
+    <button id="resetBtn">Reset</button>
+    <label>Stream speed: <select id="speed"><option value="200">Slow</option><option value="80" selected>Normal</option><option value="10">Fast</option></select></label>
+    <label><input type="checkbox" id="showVectors"> Show derivative vectors</label>
+    <a id="downloadLink" href="#" style="margin-left:auto; color:#9fd">Download sample CSV</a>
+  </div>
+  <div id="canvasWrap"><canvas id="c"></canvas></div>
+  <footer style="padding:12px;font-size:13px">Hints: Zoom with mouse wheel, pan by drag. The streaming order is breadth-first subdivision so coarse curve appears first, then details refine. Derived vectors (dx,dy) included in packets.</footer>
+
+<script>
+// --- Small embedded sample (time,price) if no CSV available ---
+const embeddedCSV = `timestamp,price
+2021-11-01T00:00:00Z,61000
+2021-11-01T01:00:00Z,61500
+2021-11-01T02:00:00Z,60300
+2021-11-01T03:00:00Z,60800
+2021-11-01T04:00:00Z,62200
+2021-11-01T05:00:00Z,61800
+2021-11-01T06:00:00Z,63000
+2021-11-01T07:00:00Z,64000
+2021-11-01T08:00:00Z,63500
+2021-11-01T09:00:00Z,64200
+2021-11-01T10:00:00Z,65500
+`;
+
+// --- Utilities: parse CSV (very tolerant) ---
+function parseCSV(text){
+  const lines = text.trim().split(/\r?\n/).filter(Boolean);
+  const header = lines.shift().split(/,|;|\t/).map(h=>h.trim().toLowerCase());
+  const tsIdx = header.findIndex(h=>/time|timestamp|date/.test(h))||0;
+  const priceIdx = header.findIndex(h=>/price|close|close_usd|closeusd/.test(h));
+  const out = [];
+  for(const l of lines){
+    const cols = l.split(/,|;|\t/).map(c=>c.trim());
+    let t = cols[tsIdx];
+    let p = parseFloat(cols[priceIdx]);
+    if(!p && cols.length>1){ p = parseFloat(cols[cols.length-1]); }
+    if(!isNaN(Date.parse(t)) && !isNaN(p)){
+      out.push({t: new Date(t).getTime()/1000, p});
+    } else if(!isNaN(+t) && !isNaN(p)){
+      out.push({t:+t, p});
+    }
+  }
+  // sort ascending
+  out.sort((a,b)=>a.t-b.t);
+  return out;
+}
+
+// --- Progressive encoder (client-side emulation of server) ---
+// We'll implement a breadth-first subdivision streaming: emit endpoints, then midpoints recursively
+
+function buildSegments(points){
+  // points: array [{t,p}]
+  // convert to arrays
+  const pts = points.map((pt,i)=>({i, x: i, y: pt.p, t: pt.t})); // x as index for uniform spacing
+  return pts;
+}
+
+function createSubdivisionQueue(pts){
+  // returns an initial queue of segments to refine; we'll start with whole polyline segments between consecutive points
+  const segments = [];
+  for(let i=0;i<pts.length-1;i++) segments.push({a:i,b:i+1,priority:0});
+  // we'll perform a BFS: use a queue and push midpoint refinements back onto queue
+  return {pts, segments, mapCache:{}};
+}
+
+function segmentError(pts,a,b){
+  // compute max vertical error between linear interp and actual points between a and b
+  const pa = pts[a], pb = pts[b];
+  let maxErr = 0, idx=-1;
+  for(let k=a+1;k<b;k++){
+    const pk = pts[k];
+    const t = (pk.x - pa.x)/(pb.x-pa.x);
+    const yL = pa.y + t*(pb.y-pa.y);
+    const err = Math.abs(pk.y - yL);
+    if(err>maxErr){ maxErr=err; idx=k; }
+  }
+  return {maxErr, idx};
+}
+
+function* streamGenerator(state){
+  const {pts} = state;
+  // start by emitting endpoints (all points at low-res: every Nth depending on length)
+  // However we'll implement true BFS: begin with endpoints of each segment
+  const queue = [];
+  for(let i=0;i<pts.length-1;i++) queue.push({a:i,b:i+1});
+  // We'll process in breadth-first manner by repeatedly splitting segment with largest error among those processed
+  // But to make streaming stable, we'll emit points in the order we encounter unique indices
+  const emitted = new Set();
+  // First emit endpoints
+  emitIndex(0); emitIndex(pts.length-1);
+  yield {type:'point', index:0, x:pts[0].x, y:pts[0].y};
+  yield {type:'point', index:pts.length-1, x:pts[pts.length-1].x, y:pts[pts.length-1].y};
+
+  // prepare refinement segments covering whole polyline
+  const segQueue = [{a:0,b:pts.length-1}];
+  while(segQueue.length){
+    const seg = segQueue.shift();
+    const {a,b} = seg;
+    if(b-a<=1) continue;
+    const {maxErr, idx} = segmentError(pts,a,b);
+    if(idx===-1){
+      // no interior points -> nothing
+      continue;
+    }
+    // emit midpoint point if not yet
+    if(!emitted.has(idx)){
+      emitted.add(idx);
+      const pt = pts[idx];
+      const deriv = computeDerivative(pts, idx);
+      yield {type:'point', index:idx, x:pt.x, y:pt.y, deriv};
+    }
+    // push left and right to queue to continue BFS
+    segQueue.push({a:a,b:idx});
+    segQueue.push({a:idx,b:b});
+  }
+  // finally emit any missing points
+  for(let i=0;i<pts.length;i++) if(!emitted.has(i)){
+    emitted.add(i);
+    const pt = pts[i];
+    const deriv = computeDerivative(pts, i);
+    yield {type:'point', index:i, x:pt.x, y:pt.y, deriv};
+  }
+  function emitIndex(i){ emitted.add(i); }
+}
+
+function computeDerivative(pts,i){
+  const n = pts.length;
+  const left = i>0?pts[i-1].y:pts[i].y;
+  const right = i<n-1?pts[i+1].y:pts[i].y;
+  const dx = (right - left)/2; // central diff in index units
+  const dt = ( (i>0?pts[i].t:pts[i].t) - (i<n-1?pts[i].t:pts[i].t) ) || 1;
+  const dydt = dx / dt;
+  return {dx, dydt};
+}
+
+// --- Canvas viz & streaming emulation ---
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W=0,H=0;resize();window.addEventListener('resize',resize);
+function resize(){ W=canvas.width = canvas.clientWidth; H=canvas.height = canvas.clientHeight; redraw(); }
+
+let dataPoints = []; // parsed points
+let ptsScaled = [];
+let gen=null; let streamTimer=null;
+let visibleIndices = new Set();
+let drawIndices = new Set();
+let transform = {tx:0,ty:0,scale:1};
+let dragging=false, lastPos=null;
+
+function project(i,y){
+  // map index->x pixel, y->pixel
+  const margin = 40;
+  const minX = 0, maxX = dataPoints.length-1;
+  const ys = dataPoints.map(d=>d.p);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const x = margin + ((i - minX)/(maxX-minX||1))*(W-2*margin);
+  const y = margin + (1 - (y-minY)/(maxY-minY||1))*(H-2*margin);
+  // apply pan/zoom
+  const sx = (x+transform.tx- W/2)*transform.scale + W/2;
+  const sy = (y+transform.ty- H/2)*transform.scale + H/2;
+  return [sx,sy];
+}
+
+function redraw(){
+  ctx.clearRect(0,0,W,H);
+  // background grid
+  ctx.fillStyle='#081226'; ctx.fillRect(0,0,W,H);
+  ctx.strokeStyle='rgba(200,220,255,0.06)'; ctx.lineWidth=1;
+  for(let i=0;i<10;i++){ ctx.beginPath(); ctx.moveTo(0,H*i/10); ctx.lineTo(W,H*i/10); ctx.stroke(); }
+
+  // draw curve from drawn indices ordered by index
+  const indices = Array.from(drawIndices).sort((a,b)=>a-b);
+  if(indices.length>0){
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for(let k=0;k<indices.length;k++){
+      const i = indices[k];
+      const [x,y] = project(i, dataPoints[i].p);
+      if(k===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+    }
+    ctx.strokeStyle = '#7ee3ff'; ctx.stroke();
+    // draw points
+    for(const i of indices){
+      const [x,y] = project(i, dataPoints[i].p);
+      ctx.beginPath(); ctx.arc(x,y,2,0,Math.PI*2); ctx.fillStyle='#bff'; ctx.fill();
+    }
+  }
+
+  if(document.getElementById('showVectors').checked){
+    // draw derivative vectors for displayed indices
+    ctx.strokeStyle='rgba(255,200,110,0.9)';
+    for(const i of indices){
+      const [x,y] = project(i, dataPoints[i].p);
+      const deriv = computeDerivativePoints(i);
+      const len = 20*Math.atan(Math.abs(deriv.dydt))/Math.PI;
+      ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x+len, y-deriv.dx*0.1); ctx.stroke();
+    }
+  }
+}
+
+function computeDerivativePoints(i){
+  // recompute rough derivative (dprice/dt) from dataPoints
+  const n=dataPoints.length; const left = i>0?dataPoints[i-1].p:dataPoints[i].p; const right = i<n-1?dataPoints[i+1].p:dataPoints[i].p;
+  const dx = (right - left)/2; const dt = ( (i>0?dataPoints[i-1].t: dataPoints[i].t) - (i<n-1?dataPoints[i+1].t: dataPoints[i].t) )||1;
+  return {dx, dydt: dx/dt};
+}
+
+// streaming control
+function startStream(speed){
+  if(!dataPoints.length) return; stopStream();
+  const pts = buildSegments(dataPoints);
+  const state = createSubdivisionQueue(dataPoints);
+  gen = streamGenerator(state);
+  const interval = parseInt(speed,10);
+  streamTimer = setInterval(()=>{
+    const res = gen.next();
+    if(res.done){ stopStream(); return; }
+    const pkt = res.value;
+    if(pkt.type==='point'){
+      drawIndices.add(pkt.index);
+      // store derivative meta
+      dataPoints[pkt.index].deriv = pkt.deriv || computeDerivativePoints(pkt.index);
+    }
+    redraw();
+  }, interval);
+}
+function stopStream(){ if(streamTimer) clearInterval(streamTimer); streamTimer=null; }
+
+// UI events
+document.getElementById('loadBtn').addEventListener('click', async ()=>{
+  const url = document.getElementById('csvUrl').value.trim();
+  document.getElementById('downloadLink').href = '#';
+  let text='';
+  try{
+    if(url){
+      const r = await fetch(url);
+      if(!r.ok) throw new Error('fetch failed');
+      text = await r.text();
+    } else {
+      text = embeddedCSV;
+    }
+  }catch(e){
+    alert('Could not fetch CSV. Using embedded sample.'); text = embeddedCSV;
+  }
+  dataPoints = parseCSV(text);
+  if(dataPoints.length===0){ alert('No parseable rows in CSV'); return; }
+  drawIndices = new Set();
+  // start streaming
+  startStream(document.getElementById('speed').value);
+});
+
+document.getElementById('fileInput').addEventListener('change', async (ev)=>{
+  const f = ev.target.files[0]; if(!f) return; const text = await f.text(); dataPoints = parseCSV(text); drawIndices = new Set(); startStream(document.getElementById('speed').value);
+});
+
+document.getElementById('resetBtn').addEventListener('click', ()=>{ stopStream(); dataPoints=[]; drawIndices=new Set(); redraw(); });
+
+// basic pan/zoom
+canvas.addEventListener('wheel', e=>{
+  e.preventDefault(); const s = e.deltaY>0?0.9:1.1; transform.scale *= s; redraw(); });
+canvas.addEventListener('mousedown', e=>{ dragging=true; lastPos=[e.clientX,e.clientY]; });
+window.addEventListener('mouseup', ()=>{ dragging=false; lastPos=null; });
+window.addEventListener('mousemove', e=>{ if(!dragging) return; const dx = e.clientX-lastPos[0]; const dy = e.clientY-lastPos[1]; transform.tx += dx; transform.ty += dy; lastPos=[e.clientX,e.clientY]; redraw(); });
+
+// populate download link examples (informed choices: cryptodatadownload 1m CSV and Kaggle 1-min dataset pages)
+const downloadLink = document.getElementById('downloadLink');
+downloadLink.href = 'https://www.cryptodatadownload.com/data/binance/';
+downloadLink.textContent = 'Get 1m BTC CSV from CryptoDataDownload (Binance)';
+
+// initial draw
+redraw();
+</script>
+</body>
+</html>
