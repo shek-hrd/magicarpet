@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>🔮 BTC Price Curve Streaming Protocol</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      margin: 0;
+      padding: 20px;
+      background: #0f0f1a;
+      color: #e0e0ff;
+    }
+    h1 {
+      text-align: center;
+      background: linear-gradient(90deg, #ff9a00, #ff4a00);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      font-size: 2.5em;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    .controls {
+      margin: 20px 0;
+      padding: 15px;
+      background: #1a1a2e;
+      border-radius: 10px;
+      display: flex;
+      gap: 15px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    button, input {
+      padding: 10px 15px;
+      border: none;
+      border-radius: 6px;
+      background: #3a3a5c;
+      color: white;
+      cursor: pointer;
+      font-size: 16px;
+    }
+    input[type="file"] {
+      color: #aaa;
+    }
+    #chart {
+      width: 100%;
+      height: 500px;
+      background: #0a0a14;
+      border-radius: 10px;
+      overflow: hidden;
+      position: relative;
+    }
+    svg {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+    .info {
+      margin-top: 15px;
+      padding: 10px;
+      background: #161625;
+      border-radius: 6px;
+      font-family: monospace;
+      white-space: pre;
+      font-size: 14px;
+      color: #a0ffa0;
+    }
+    .loader {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 24px;
+      color: #ff9a00;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>📈 BTC Price Curve Streaming Protocol</h1>
+
+    <div class="controls">
+      <input type="file" id="fileInput" accept=".csv" />
+      <button id="startBtn" disabled>▶️ Start Streaming</button>
+      <button id="resetBtn">🔁 Reset</button>
+      <span>Zoom: <input type="range" id="zoomSlider" min="0.1" max="5" step="0.1" value="1" /></span>
+    </div>
+
+    <div id="chart">
+      <div class="loader" id="loader">Loading data from samplebtc.csv...</div>
+      <svg id="svg"></svg>
+    </div>
+
+    <div class="info" id="info">
+      Status: Loading samplebtc.csv...
+    </div>
+  </div>
+
+  <script>
+    // ======================
+    // STATE
+    // ======================
+    let rawData = [];
+    let derivativeVectors = [];
+    let streamedVectors = [];
+    let streamInterval = null;
+    let streamIndex = 0;
+    let zoom = 1;
+
+    const svg = document.getElementById('svg');
+    const info = document.getElementById('info');
+    const loader = document.getElementById('loader');
+    const fileInput = document.getElementById('fileInput');
+    const startBtn = document.getElementById('startBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    const zoomSlider = document.getElementById('zoomSlider');
+
+    // ======================
+    // UTILS
+    // ======================
+    function parseCSV(text) {
+      const lines = text.trim().split('\n');
+      const result = [];
+      for (let line of lines) {
+        line = line.trim();
+        if (!line || line.startsWith('#')) continue;
+        const parts = line.split(/[,;\t]/);
+        if (parts.length < 2) continue;
+
+        let timestamp = parseFloat(parts[0]);
+        let price = parseFloat(parts[1]);
+
+        // Handle timestamp in seconds (like 1757289300.0) → convert to ms
+        if (timestamp && timestamp < 1e12) timestamp *= 1000;
+
+        if (!isNaN(timestamp) && !isNaN(price)) {
+          result.push([timestamp, price]);
+        }
+      }
+      return result.sort((a, b) => a[0] - b[0]); // sort by time
+    }
+
+    function computeDerivatives(data) {
+      if (data.length < 3) return [];
+      const vectors = [];
+      for (let i = 1; i < data.length - 1; i++) {
+        const [t0, p0] = data[i-1];
+        const [t1, p1] = data[i];
+        const [t2, p2] = data[i+1];
+
+        // Central difference for derivative
+        const dt = (t2 - t0) / 2;
+        const dp = (p2 - p0) / 2;
+
+        // Avoid division by zero
+        if (dt === 0) continue;
+
+        // Normalize vector for direction, keep magnitude as importance
+        const len = Math.sqrt(dt*dt + dp*dp);
+        const dx = dt / len;
+        const dy = dp / len;
+
+        vectors.push({
+          x: t1,
+          y: p1,
+          dx: dx,
+          dy: dy,
+          mag: len,
+          t: t1,
+          curvature: Math.abs(dp / dt) || 0 // crude curvature approx
+        });
+      }
+      return vectors;
+    }
+
+    function sortByImportance(vectors) {
+      // Sort by: recency (newer first) + curvature (sharper turns first)
+      return [...vectors].sort((a, b) => {
+        const timeWeight = 0.7;
+        const curveWeight = 0.3;
+        const now = Date.now();
+        const aRecency = now - a.t;
+        const bRecency = now - b.t;
+        const aScore = timeWeight * (1 / (aRecency + 1)) + curveWeight * a.curvature;
+        const bScore = timeWeight * (1 / (bRecency + 1)) + curveWeight * b.curvature;
+        return bScore - aScore; // higher score first
+      });
+    }
+
+    function renderCurve(vectors) {
+      if (vectors.length < 2) return;
+
+      // Find bounds
+      const times = vectors.map(v => v.x);
+      const prices = vectors.map(v => v.y);
+      const tMin = Math.min(...times);
+      const tMax = Math.max(...times);
+      const pMin = Math.min(...prices);
+      const pMax = Math.max(...prices);
+
+      const width = svg.clientWidth;
+      const height = svg.clientHeight;
+
+      // Scale functions
+      const x = t => ((t - tMin) / (tMax - tMin)) * width;
+      const y = p => height - ((p - pMin) / (pMax - pMin)) * height;
+
+      // Build path using cardinal spline (tension = 0.5)
+      let pathData = `M ${x(vectors[0].x)} ${y(vectors[0].y)}`;
+      for (let i = 0; i < vectors.length - 1; i++) {
+        const p0 = i === 0 ? vectors[0] : vectors[i-1];
+        const p1 = vectors[i];
+        const p2 = vectors[i+1];
+        const p3 = i === vectors.length - 2 ? vectors[i+1] : vectors[i+2];
+
+        // Cardinal spline control points
+        const tension = 0.5;
+        const xc1 = x(p1.x) + tension * (x(p2.x) - x(p0.x)) / 2;
+        const yc1 = y(p1.y) + tension * (y(p2.y) - y(p0.y)) / 2;
+        const xc2 = x(p2.x) - tension * (x(p3.x) - x(p1.x)) / 2;
+        const yc2 = y(p2.y) - tension * (y(p3.y) - y(p1.y)) / 2;
+
+        pathData += ` C ${xc1} ${yc1}, ${xc2} ${yc2}, ${x(p2.x)} ${y(p2.y)}`;
+      }
+
+      // Clear SVG
+      svg.innerHTML = '';
+
+      // Draw curve
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', pathData);
+      path.setAttribute('fill', 'none');
+      path.setAttribute('stroke', '#ff9a00');
+      path.setAttribute('stroke-width', '2');
+      path.setAttribute('stroke-linecap', 'round');
+      path.setAttribute('stroke-linejoin', 'round');
+      svg.appendChild(path);
+    }
+
+    function startStreaming() {
+      if (streamInterval) clearInterval(streamInterval);
+      streamedVectors = [];
+      streamIndex = 0;
+      loader.style.display = 'block';
+
+      streamInterval = setInterval(() => {
+        const chunk = derivativeVectors.slice(streamIndex, streamIndex + 10);
+        if (chunk.length === 0) {
+          clearInterval(streamInterval);
+          loader.style.display = 'none';
+          info.textContent = `✅ Streaming complete. Total vectors: ${streamedVectors.length}`;
+          return;
+        }
+
+        streamedVectors.push(...chunk);
+        streamIndex += 10;
+
+        // Render progressively
+        renderCurve(streamedVectors);
+
+        info.textContent = `📡 Streaming... Received ${streamedVectors.length} of ${derivativeVectors.length} vectors`;
+      }, 100);
+    }
+
+    // ======================
+    // INIT — Load samplebtc.csv
+    // ======================
+    async function init() {
+      try {
+        const response = await fetch('./samplebtc.csv');
+        if (!response.ok) throw new Error(`Failed to load samplebtc.csv: ${response.status}`);
+        const text = await response.text();
+        rawData = parseCSV(text);
+        processAndSortData();
+        startBtn.disabled = false;
+        info.textContent = `📁 Loaded ${rawData.length} data points from samplebtc.csv`;
+      } catch (err) {
+        console.error(err);
+        info.textContent = `⚠️ Error loading samplebtc.csv: ${err.message}. Please upload a file.`;
+        loader.style.display = 'none';
+      }
+
+      fileInput.addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const text = await file.text();
+        rawData = parseCSV(text);
+        processAndSortData();
+        startBtn.disabled = false;
+        info.textContent = `📁 Loaded ${rawData.length} data points from uploaded file.`;
+      });
+
+      startBtn.addEventListener('click', startStreaming);
+
+      resetBtn.addEventListener('click', () => {
+        if (streamInterval) clearInterval(streamInterval);
+        streamedVectors = [];
+        svg.innerHTML = '';
+        loader.style.display = 'block';
+        info.textContent = '🔁 Reset. Click "Start Streaming" to begin.';
+      });
+
+      zoomSlider.addEventListener('input', (e) => {
+        zoom = +e.target.value;
+        info.textContent += `\n🔍 Zoom: ${zoom.toFixed(1)}x`;
+      });
+    }
+
+    function processAndSortData() {
+      derivativeVectors = computeDerivatives(rawData);
+      if (derivativeVectors.length === 0) {
+        info.textContent = '❌ Not enough data to compute derivatives. Need at least 3 points.';
+        startBtn.disabled = true;
+        return;
+      }
+      derivativeVectors = sortByImportance(derivativeVectors);
+      startBtn.disabled = false;
+      info.textContent = `📊 Processed ${derivativeVectors.length} derivative vectors. Ready to stream.`;
+    }
+
+    // Start!
+    window.addEventListener('load', init);
+  </script>
+</body>
+</html>
