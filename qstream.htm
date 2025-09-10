@@ -1,0 +1,1013 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>🐱 Universal Curved Streaming Protocol — ES5 SAFE + MULTI-FORMAT</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      margin: 0;
+      padding: 0;
+      background: #030308;
+      color: #e0e0ff;
+      display: flex;
+      min-height: 100vh;
+    }
+    .split {
+      display: flex;
+      width: 100%;
+      height: 100vh;
+    }
+    .panel {
+      width: 50%;
+      padding: 20px;
+      box-sizing: border-box;
+      overflow-y: auto;
+    }
+    .server {
+      background: #08081a;
+      border-right: 2px solid #444;
+    }
+    .client {
+      background: #030310;
+    }
+    h1, h2 {
+      text-align: center;
+      background: linear-gradient(90deg, #ff00cc, #3333ff);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-top: 0;
+    }
+    .server h1 { background: linear-gradient(90deg, #ff9a00, #ff4a00); }
+    .client h1 { background: linear-gradient(90deg, #00ffaa, #00aaff); }
+
+    button, input, select {
+      padding: 10px 15px;
+      margin: 5px 0;
+      border: none;
+      border-radius: 6px;
+      background: #2a2a5a;
+      color: white;
+      cursor: pointer;
+      font-size: 14px;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    input[type="text"], input[type="file"] {
+      color: #ccc;
+    }
+    .progress {
+      width: 100%;
+      height: 10px;
+      background: #1a1a3a;
+      border-radius: 5px;
+      margin: 10px 0;
+      overflow: hidden;
+    }
+    .progress-bar {
+      height: 100%;
+      background: linear-gradient(90deg, #ff00cc, #3333ff);
+      width: 0%;
+      transition: width 0.3s ease;
+    }
+    #chart, #volumeCanvasContainer {
+      width: 100%;
+      height: 250px;
+      background: #050515;
+      border-radius: 8px;
+      margin: 15px 0;
+      position: relative;
+    }
+    svg {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+    .log {
+      background: #0a0a20;
+      padding: 10px;
+      border-radius: 6px;
+      font-family: monospace;
+      font-size: 12px;
+      white-space: pre-wrap;
+      height: 150px;
+      overflow-y: auto;
+      margin-top: 10px;
+    }
+    .loader {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: #ff00cc;
+      font-size: 18px;
+    }
+    .media-container {
+      width: 100%;
+      height: 200px;
+      background: #050515;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 15px 0;
+      color: #aaa;
+    }
+    canvas {
+      display: block;
+      margin: 0 auto;
+    }
+    .controls-3d {
+      display: flex;
+      gap: 10px;
+      margin: 10px 0;
+    }
+    .controls-3d button {
+      flex: 1;
+      font-size: 12px;
+      padding: 8px;
+    }
+    .debug {
+      background: #1a0a0a;
+      color: #ff9a9a;
+      padding: 8px;
+      border-radius: 4px;
+      margin-top: 10px;
+      font-size: 11px;
+      max-height: 100px;
+      overflow: auto;
+    }
+    .format-selector {
+      margin: 10px 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="split">
+    <!-- SERVER SIDE PANEL -->
+    <div class="panel server">
+      <h1>⚙️ SERVER EMULATOR — MULTI-FORMAT</h1>
+      
+      <h2>📈 Graph Data</h2>
+      <select id="graphFormat" class="format-selector">
+        <option value="csv">CSV (timestamp,price)</option>
+        <option value="json">JSON [{time, price}]</option>
+      </select>
+      <input type="file" id="graphFile" accept=".csv,.json" />
+      <div class="progress"><div class="progress-bar" id="graphProgress"></div></div>
+      <button id="loadGraphBtn">📥 Load Graph Data</button>
+      <button id="downloadGraphDerivatives" disabled>💾 Download Derivatives (JSON)</button>
+
+      <h2>🎥 Video/Audio/Image</h2>
+      <select id="mediaFormat" class="format-selector">
+        <option value="video">Video (MP4, WebM)</option>
+        <option value="audio">Audio (MP3, WAV)</option>
+        <option value="youtube">YouTube URL</option>
+        <option value="images">Image Sequence (ZIP)</option>
+      </select>
+      <input type="text" id="mediaUrl" placeholder="URL or File" />
+      <div class="progress"><div class="progress-bar" id="mediaProgress"></div></div>
+      <button id="loadMediaBtn">📥 Load Media</button>
+      <button id="downloadMediaDerivatives" disabled>💾 Download Derivatives (JSON)</button>
+
+      <h2>📤 Streaming Control</h2>
+      <button id="startStreamBtn" disabled>▶️ Start Streaming All</button>
+      <button id="resetStreamBtn">🔁 Reset Stream</button>
+
+      <div class="log" id="serverLog">[Server Log] Waiting for data...</div>
+      <div class="debug" id="serverDebug">Debug info will appear here.</div>
+    </div>
+
+    <!-- CLIENT SIDE PANEL -->
+    <div class="panel client">
+      <h1>📡 CLIENT EMULATOR — UNIVERSAL</h1>
+      <h2>📊 Graph Stream</h2>
+      <div id="chart">
+        <div class="loader">Awaiting stream...</div>
+        <svg id="svg"></svg>
+      </div>
+
+      <h2>🌀 Media Stream</h2>
+      <div class="controls-3d">
+        <button id="playPauseBtn">⏯️ Play/Pause</button>
+        <button id="rotateBtn">🔄 Auto-Rotate</button>
+        <input type="range" id="timeSlider" min="0" max="100" value="0" />
+      </div>
+      <div id="volumeCanvasContainer">
+        <div class="loader">Awaiting media stream...</div>
+        <canvas id="volumeCanvas" width="512" height="512"></canvas>
+      </div>
+
+      <div class="log" id="clientLog">[Client Log] Ready to receive...</div>
+      <div class="debug" id="clientDebug">Client debug info.</div>
+    </div>
+  </div>
+
+  <script>
+    // ======================
+    // BACKWARD-COMPATIBLE SERVER (NO ?. SYNTAX)
+    // ======================
+    function Server() {
+      this.graphData = null;
+      this.videoFrames = [];
+      this.derivativeVectors = [];
+      this.volumeVectors = [];
+      this.streamChunks = [];
+      this.chunkIndex = 0;
+      this.onChunkReady = null;
+      this.onComplete = null;
+    }
+
+    Server.prototype.log = function(msg) {
+      var logDiv = document.getElementById('serverLog');
+      logDiv.textContent += '\n[SERVER] ' + msg;
+      logDiv.scrollTop = logDiv.scrollHeight;
+      console.log('[SERVER]', msg);
+    };
+
+    Server.prototype.debug = function(msg) {
+      document.getElementById('serverDebug').textContent = msg;
+      console.debug('[SERVER DEBUG]', msg);
+    };
+
+    Server.prototype.loadGraphData = function(fileOrPath, format, progressCallback, callback) {
+      var self = this;
+      this.log('Loading graph data: ' + (typeof fileOrPath === 'string' ? fileOrPath : 'File'));
+
+      if (typeof fileOrPath === 'string') {
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', fileOrPath, true);
+        xhr.responseType = 'blob';
+
+        xhr.onprogress = function(e) {
+          if (e.lengthComputable && progressCallback) {
+            progressCallback(e.loaded / e.total);
+          }
+        };
+
+        xhr.onload = function() {
+          if (xhr.status !== 200) {
+            self.log('❌ HTTP ' + xhr.status);
+            callback(new Error('HTTP ' + xhr.status));
+            return;
+          }
+
+          var reader = new FileReader();
+          reader.onload = function(e) {
+            var text = e.target.result;
+            try {
+              self.graphData = self.parseGraphData(text, format);
+              self.log('✅ Graph loaded: ' + self.graphData.length + ' points');
+              self.debug('First point: ' + new Date(self.graphData[0][0]) + ' → $' + self.graphData[0][1]);
+              document.getElementById('downloadGraphDerivatives').disabled = false;
+              callback(null);
+            } catch (err) {
+              self.log('❌ Parse error: ' + err.message);
+              callback(err);
+            }
+          };
+          reader.readAsText(xhr.response);
+        };
+
+        xhr.onerror = function() {
+          callback(new Error('Network error'));
+        };
+
+        xhr.send();
+      } else {
+        var reader = new FileReader();
+        reader.onload = function(e) {
+          var text = e.target.result;
+          try {
+            self.graphData = self.parseGraphData(text, format);
+            self.log('✅ Graph loaded: ' + self.graphData.length + ' points');
+            if (progressCallback) progressCallback(1);
+            document.getElementById('downloadGraphDerivatives').disabled = false;
+            callback(null);
+          } catch (err) {
+            self.log('❌ Parse error: ' + err.message);
+            callback(err);
+          }
+        };
+        reader.readAsText(fileOrPath);
+      }
+    };
+
+    Server.prototype.parseGraphData = function(text, format) {
+      var result = [];
+      if (format === 'csv') {
+        var lines = text.split('\n');
+        for (var i = 0; i < lines.length; i++) {
+          var line = lines[i].trim();
+          if (!line || line.charAt(0) === '#') continue;
+          var parts = line.split(/[,;\t]/);
+          if (parts.length < 2) continue;
+          var timestamp = parseFloat(parts[0]);
+          var price = parseFloat(parts[1]);
+          if (isNaN(timestamp) || isNaN(price)) continue;
+          if (timestamp && timestamp < 1e12) timestamp *= 1000;
+          result.push([timestamp, price]);
+        }
+      } else if (format === 'json') {
+        var json = JSON.parse(text);
+        for (var i = 0; i < json.length; i++) {
+          var item = json[i];
+          var timestamp = item.time || item.timestamp;
+          var price = item.price || item.value;
+          if (typeof timestamp === 'string') {
+            timestamp = new Date(timestamp).getTime();
+          }
+          if (timestamp && timestamp < 1e12) timestamp *= 1000;
+          if (!isNaN(timestamp) && !isNaN(price)) {
+            result.push([timestamp, price]);
+          }
+        }
+      }
+      result.sort(function(a, b) { return a[0] - b[0]; });
+      return result;
+    };
+
+    Server.prototype.encodeGraphToVectors = function() {
+      if (!this.graphData || this.graphData.length < 3) {
+        this.log('⚠️ Not enough data');
+        return;
+      }
+      var vectors = [];
+      for (var i = 1; i < this.graphData.length - 1; i++) {
+        var t0 = this.graphData[i-1][0], p0 = this.graphData[i-1][1];
+        var t1 = this.graphData[i][0], p1 = this.graphData[i][1];
+        var t2 = this.graphData[i+1][0], p2 = this.graphData[i+1][1];
+        var dt = (t2 - t0) / 2;
+        var dp = (p2 - p0) / 2;
+        if (dt === 0) continue;
+        var len = Math.sqrt(dt*dt + dp*dp);
+        var dx = dt / len;
+        var dy = dp / len;
+        vectors.push({
+          type: 'graph',
+          x: t1,
+          y: p1,
+          dx: dx, dy: dy, mag: len, t: t1,
+          curvature: Math.abs(dp / dt),
+          originalIndex: i
+        });
+      }
+      this.derivativeVectors = this.sortByImportance(vectors);
+      this.log('🔢 Encoded ' + vectors.length + ' vectors');
+    };
+
+    Server.prototype.sortByImportance = function(vectors) {
+      var now = Date.now();
+      var sorted = vectors.slice();
+      sorted.sort(function(a, b) {
+        var timeWeight = 0.7;
+        var curveWeight = 0.3;
+        var aRecency = now - a.t;
+        var bRecency = now - b.t;
+        var aScore = timeWeight * (1 / (aRecency + 1)) + curveWeight * a.curvature;
+        var bScore = timeWeight * (1 / (bRecency + 1)) + curveWeight * b.curvature;
+        return bScore - aScore;
+      });
+      return sorted;
+    };
+
+    Server.prototype.loadMediaData = function(urlOrFile, format, progressCallback, callback) {
+      this.log('Loading media: ' + urlOrFile + ' (' + format + ')');
+      if (format === 'youtube') {
+        this.log('⚠️ YouTube not implemented in demo. Use direct MP4 link.');
+        alert('YouTube support requires backend proxy. Use direct MP4/WAV link for now.');
+        callback(new Error('YouTube not implemented'));
+      } else if (format === 'audio' || format === 'video') {
+        this.loadVideoData(urlOrFile, progressCallback, callback);
+      } else if (format === 'images') {
+        this.log('⚠️ Image sequence not implemented in demo.');
+        callback(new Error('Image sequence not implemented'));
+      }
+    };
+
+    Server.prototype.loadVideoData = function(url, progressCallback, callback) {
+      var self = this;
+      var video = document.createElement('video');
+      video.muted = true;
+      video.crossOrigin = 'anonymous';
+      video.preload = 'auto';
+      video.playsInline = true;
+
+      video.onerror = function() {
+        var msg = 'Video error: ' + (video.error ? video.error.message : 'unknown');
+        self.log('❌ ' + msg);
+        callback(new Error(msg));
+      };
+
+      video.onloadedmetadata = function() {
+        self.log('📹 Loaded: ' + video.videoWidth + 'x' + video.videoHeight + ', ' + video.duration + 's');
+        var canvas = document.createElement('canvas');
+        var ctx = canvas.getContext('2d');
+        var FPS = 5;
+        var totalFrames = Math.floor(video.duration * FPS);
+        var frameCount = 0;
+        var frames = [];
+
+        var processFrame = function() {
+          if (frameCount >= totalFrames) {
+            self.videoFrames = frames;
+            self.log('🎞️ Extracted ' + frames.length + ' frames');
+            self.encodeVideoToVolume();
+            callback(null);
+            setTimeout(function() {
+              self.prepareStream();
+              self.startStreaming();
+            }, 100);
+            return;
+          }
+
+          video.currentTime = frameCount / FPS;
+
+          var onseeked = function() {
+            canvas.width = 64;
+            canvas.height = Math.floor(video.videoHeight * (64 / video.videoWidth));
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            var imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            frames.push({ imageData: imageData, timestamp: video.currentTime });
+            frameCount++;
+            if (progressCallback) progressCallback(frameCount / totalFrames);
+            setTimeout(processFrame, 1);
+          };
+
+          video.onseeked = onseeked;
+        };
+
+        processFrame();
+      };
+
+      video.src = url;
+    };
+
+    Server.prototype.encodeVideoToVolume = function() {
+      this.log('Encoding video to volume...');
+      this.volumeVectors = [];
+
+      for (var t = 1; t < this.videoFrames.length - 1; t++) {
+        var prev = this.videoFrames[t-1].imageData;
+        var curr = this.videoFrames[t].imageData;
+        var next = this.videoFrames[t+1].imageData;
+        var w = curr.width;
+        var h = curr.height;
+
+        for (var y = 2; y < h-2; y += 2) {
+          for (var x = 2; x < w-2; x += 2) {
+            var idx = (y * w + x) * 4;
+            var r = curr.data[idx];
+            var g = curr.data[idx + 1];
+            var b = curr.data[idx + 2];
+            var c = (r + g + b) / 3;
+
+            var left = (curr.data[idx - 4] + curr.data[idx - 3] + curr.data[idx - 2]) / 3;
+            var right = (curr.data[idx + 4] + curr.data[idx + 5] + curr.data[idx + 6]) / 3;
+            var up = (curr.data[idx - w*4] + curr.data[idx - w*4 + 1] + curr.data[idx - w*4 + 2]) / 3;
+            var down = (curr.data[idx + w*4] + curr.data[idx + w*4 + 1] + curr.data[idx + w*4 + 2]) / 3;
+            var prevC = (prev.data[idx] + prev.data[idx+1] + prev.data[idx+2]) / 3;
+            var nextC = (next.data[idx] + next.data[idx+1] + next.data[idx+2]) / 3;
+
+            var dx = (right - left) / 2;
+            var dy = (down - up) / 2;
+            var dt = (nextC - prevC) / 2;
+            var mag = Math.sqrt(dx*dx + dy*dy + dt*dt);
+            if (mag < 5) continue;
+            var curvature = Math.abs(dx) + Math.abs(dy) + Math.abs(dt);
+
+            this.volumeVectors.push({
+              type: 'volume',
+              x: x, y: y, t: t,
+              dx: dx, dy: dy, dt: dt,
+              mag: mag,
+              curvature: curvature,
+              color: c,
+              r: r, g: g, b: b
+            });
+          }
+        }
+      }
+
+      this.volumeVectors.sort(function(a, b) {
+        var curveWeight = 0.6;
+        var timeWeight = 0.4;
+        var maxT = this.videoFrames.length;
+        var aTimeScore = 1 - (a.t / maxT);
+        var bTimeScore = 1 - (b.t / maxT);
+        var aScore = curveWeight * a.curvature + timeWeight * aTimeScore;
+        var bScore = curveWeight * b.curvature + timeWeight * bTimeScore;
+        return bScore - aScore;
+      }.bind(this));
+
+      this.log('🌀 Encoded ' + this.volumeVectors.length + ' volume vectors');
+      document.getElementById('downloadMediaDerivatives').disabled = false;
+    };
+
+    Server.prototype.prepareStream = function() {
+      this.streamChunks = [];
+      if (this.derivativeVectors && this.derivativeVectors.length > 0) {
+        for (var i = 0; i < this.derivativeVectors.length; i += 10) {
+          this.streamChunks.push({
+            type: 'graph',
+             this.derivativeVectors.slice(i, i+10)
+          });
+        }
+      }
+      if (this.volumeVectors && this.volumeVectors.length > 0) {
+        for (var i = 0; i < this.volumeVectors.length; i += 500) {
+          this.streamChunks.push({
+            type: 'volume',
+             this.volumeVectors.slice(i, i+500),
+            totalFrames: this.videoFrames.length
+          });
+        }
+      }
+      this.chunkIndex = 0;
+      this.log('📦 Stream prepared: ' + this.streamChunks.length + ' chunks');
+    };
+
+    Server.prototype.startStreaming = function(interval) {
+      if (!interval) interval = 150;
+      if (this.streamInterval) clearInterval(this.streamInterval);
+      this.chunkIndex = 0;
+      var self = this;
+      this.streamInterval = setInterval(function() {
+        if (self.chunkIndex >= self.streamChunks.length) {
+          clearInterval(self.streamInterval);
+          self.log('✅ Streaming completed');
+          if (self.onComplete) self.onComplete();
+          return;
+        }
+        var chunk = self.streamChunks[self.chunkIndex];
+        if (self.onChunkReady) self.onChunkReady(chunk);
+        self.chunkIndex++;
+        self.log('📤 Sent chunk ' + self.chunkIndex + '/' + self.streamChunks.length + ' (' + chunk.type + ')');
+      }, interval);
+    };
+
+    // ======================
+    // CLIENT — ALSO ES5 SAFE
+    // ======================
+    function Client() {
+      this.graphVectors = [];
+      this.volumeVectors = [];
+      this.totalFrames = 0;
+      this.isPlaying = true;
+      this.autoRotate = false;
+      this.currentFrame = 0;
+      this.rotation = 0;
+      this.volumeTexture = null;
+      this.textureWidth = 0;
+      this.textureHeight = 0;
+      this.sliceWidth = 64;
+      this.sliceHeight = 64;
+
+      this.initWebGL();
+    }
+
+    Client.prototype.log = function(msg) {
+      var logDiv = document.getElementById('clientLog');
+      logDiv.textContent += '\n[CLIENT] ' + msg;
+      logDiv.scrollTop = logDiv.scrollHeight;
+      console.log('[CLIENT]', msg);
+    };
+
+    Client.prototype.debug = function(msg) {
+      document.getElementById('clientDebug').textContent = msg;
+      console.debug('[CLIENT DEBUG]', msg);
+    };
+
+    Client.prototype.initWebGL = function() {
+      var canvas = document.getElementById('volumeCanvas');
+      this.gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+      if (!this.gl) {
+        this.log('❌ WebGL not supported');
+        return;
+      }
+
+      var vsSource = [
+        'attribute vec2 a_position;',
+        'varying vec2 v_uv;',
+        'void main() {',
+        '  v_uv = (a_position + 1.0) * 0.5;',
+        '  gl_Position = vec4(a_position, 0, 1);',
+        '}'
+      ].join('\n');
+
+      var fsSource = [
+        'precision highp float;',
+        'uniform sampler2D u_volume;',
+        'uniform float u_time;',
+        'uniform float u_rotation;',
+        'uniform vec2 u_textureSize;',
+        'uniform int u_frames;',
+        'uniform vec2 u_sliceSize;',
+        'varying vec2 v_uv;',
+        'vec4 sampleVolume(float x, float y, float z) {',
+        '  float cols = floor(u_textureSize.x / u_sliceSize.x);',
+        '  float frameX = mod(z, cols);',
+        '  float frameY = floor(z / cols);',
+        '  vec2 uv = vec2(',
+        '    (frameX * u_sliceSize.x + x) / u_textureSize.x,',
+        '    (frameY * u_sliceSize.y + y) / u_textureSize.y',
+        '  );',
+        '  return texture2D(u_volume, uv);',
+        '}',
+        'void main() {',
+        '  vec2 uv = v_uv;',
+        '  float cosa = cos(u_rotation);',
+        '  float sina = sin(u_rotation);',
+        '  uv = vec2(uv.x * cosa - uv.y * sina, uv.x * sina + uv.y * cosa);',
+        '  uv = uv * 2.0 - 1.0;',
+        '  vec3 ro = vec3(0, 0, -3);',
+        '  vec3 rd = normalize(vec3(uv * 1.5, 1.0));',
+        '  float d = 0.0;',
+        '  vec4 color = vec4(0.0);',
+        '  float alpha = 0.0;',
+        '  for (int i = 0; i < 64; i++) {',
+        '    vec3 p = ro + rd * d;',
+        '    float px = (p.x + 1.0) * 0.5 * u_sliceSize.x;',
+        '    float py = (p.y + 1.0) * 0.5 * u_sliceSize.y;',
+        '    float pz = u_time;',
+        '    if (px < 0.0 || px >= u_sliceSize.x || py < 0.0 || py >= u_sliceSize.y || pz < 0.0 || pz >= float(u_frames)) {',
+        '      d += 0.1;',
+        '      continue;',
+        '    }',
+        '    vec4 voxel = sampleVolume(px, py, pz);',
+        '    float density = voxel.a * 2.0;',
+        '    if (density > 0.1) {',
+        '      color.rgb += voxel.rgb * density * (1.0 - alpha);',
+        '      alpha += (1.0 - alpha) * density;',
+        '      if (alpha > 0.95) break;',
+        '    }',
+        '    d += 0.1;',
+        '  }',
+        '  if (alpha < 0.01) discard;',
+        '  gl_FragColor = vec4(color.rgb, alpha);',
+        '}'
+      ].join('\n');
+
+      var program = this.createProgram(vsSource, fsSource);
+      this.gl.useProgram(program);
+
+      var positionBuffer = this.gl.createBuffer();
+      this.gl.bindBuffer(this.gl.ARRAY_BUFFER, positionBuffer);
+      this.gl.bufferData(this.gl.ARRAY_BUFFER, new Float32Array([
+        -1, -1,
+         1, -1,
+        -1,  1,
+         1,  1
+      ]), this.gl.STATIC_DRAW);
+
+      var positionLocation = this.gl.getAttribLocation(program, 'a_position');
+      this.gl.enableVertexAttribArray(positionLocation);
+      this.gl.vertexAttribPointer(positionLocation, 2, this.gl.FLOAT, false, 0, 0);
+
+      this.uVolume = this.gl.getUniformLocation(program, 'u_volume');
+      this.uTime = this.gl.getUniformLocation(program, 'u_time');
+      this.uRotation = this.gl.getUniformLocation(program, 'u_rotation');
+      this.uTextureSize = this.gl.getUniformLocation(program, 'u_textureSize');
+      this.uFrames = this.gl.getUniformLocation(program, 'u_frames');
+      this.uSliceSize = this.gl.getUniformLocation(program, 'u_sliceSize');
+
+      this.renderLoop();
+    };
+
+    Client.prototype.createProgram = function(vsSource, fsSource) {
+      var compileShader = function(gl, type, source) {
+        var shader = gl.createShader(type);
+        gl.shaderSource(shader, source);
+        gl.compileShader(shader);
+        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+          console.error(type === gl.VERTEX_SHADER ? 'Vertex' : 'Fragment', 'shader error:', gl.getShaderInfoLog(shader));
+          return null;
+        }
+        return shader;
+      };
+
+      var vs = compileShader(this.gl, this.gl.VERTEX_SHADER, vsSource);
+      var fs = compileShader(this.gl, this.gl.FRAGMENT_SHADER, fsSource);
+      if (!vs || !fs) return null;
+
+      var program = this.gl.createProgram();
+      this.gl.attachShader(program, vs);
+      this.gl.attachShader(program, fs);
+      this.gl.linkProgram(program);
+      return program;
+    };
+
+    Client.prototype.renderLoop = function() {
+      if (this.isPlaying) {
+        this.currentFrame = (this.currentFrame + 0.2) % (this.totalFrames || 100);
+      }
+      if (this.autoRotate) {
+        this.rotation += 0.01;
+      }
+
+      if (this.volumeTexture) {
+        this.gl.uniform1f(this.uTime, this.currentFrame);
+        this.gl.uniform1f(this.uRotation, this.rotation);
+        this.gl.uniform1i(this.uFrames, this.totalFrames);
+        this.gl.uniform2f(this.uTextureSize, this.textureWidth, this.textureHeight);
+        this.gl.uniform2f(this.uSliceSize, this.sliceWidth, this.sliceHeight);
+        this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
+      }
+
+      var self = this;
+      requestAnimationFrame(function() {
+        self.renderLoop();
+      });
+    };
+
+    Client.prototype.buildVolumeTexture = function() {
+      if (!this.volumeVectors || this.volumeVectors.length === 0) return;
+
+      var frames = {};
+      for (var i = 0; i < this.volumeVectors.length; i++) {
+        var v = this.volumeVectors[i];
+        if (!frames[v.t]) frames[v.t] = [];
+        frames[v.t].push(v);
+      }
+
+      var frameKeys = [];
+      for (var k in frames) {
+        if (frames.hasOwnProperty(k)) frameKeys.push(k);
+      }
+
+      if (frameKeys.length === 0) return;
+
+      var firstFrame = frames[frameKeys[0]];
+      if (!firstFrame || firstFrame.length === 0) return;
+
+      var maxX = 0, maxY = 0;
+      for (var i = 0; i < this.volumeVectors.length; i++) {
+        var v = this.volumeVectors[i];
+        if (v.x > maxX) maxX = v.x;
+        if (v.y > maxY) maxY = v.y;
+      }
+      maxX++; maxY++;
+
+      this.sliceWidth = maxX;
+      this.sliceHeight = maxY;
+
+      var cols = Math.ceil(Math.sqrt(frameKeys.length));
+      var rows = Math.ceil(frameKeys.length / cols);
+      this.textureWidth = cols * maxX;
+      this.textureHeight = rows * maxY;
+
+      var data = new Uint8ClampedArray(this.textureWidth * this.textureHeight * 4);
+      for (var i = 0; i < data.length; i++) data[i] = 0;
+
+      var frameIndex = 0;
+      for (var t in frames) {
+        if (!frames.hasOwnProperty(t)) continue;
+        var col = frameIndex % cols;
+        var row = Math.floor(frameIndex / cols);
+        var offsetX = col * maxX;
+        var offsetY = row * maxY;
+
+        var frameVectors = frames[t];
+        for (var j = 0; j < frameVectors.length; j++) {
+          var v = frameVectors[j];
+          var tx = offsetX + v.x;
+          var ty = offsetY + v.y;
+          var idx = (ty * this.textureWidth + tx) * 4;
+          data[idx] = v.r || v.color;
+          data[idx+1] = v.g || v.color;
+          data[idx+2] = v.b || v.color;
+          data[idx+3] = 255;
+        }
+
+        frameIndex++;
+      }
+
+      var texture = this.gl.createTexture();
+      this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
+      this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, this.textureWidth, this.textureHeight, 0, this.gl.RGBA, this.gl.UNSIGNED_BYTE, data);
+      this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MIN_FILTER, this.gl.LINEAR);
+      this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MAG_FILTER, this.gl.LINEAR);
+      this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_S, this.gl.CLAMP_TO_EDGE);
+      this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_T, this.gl.CLAMP_TO_EDGE);
+
+      this.volumeTexture = texture;
+      this.gl.activeTexture(this.gl.TEXTURE0);
+      this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
+      this.gl.uniform1i(this.uVolume, 0);
+
+      this.log('🎨 Built volume texture: ' + this.textureWidth + 'x' + this.textureHeight + ', ' + frameKeys.length + ' frames');
+      document.getElementById('volumeCanvasContainer').querySelector('.loader').style.display = 'none';
+    };
+
+    Client.prototype.receiveChunk = function(chunk) {
+      this.log('📥 Received: ' + chunk.type + ', ' + chunk.data.length + ' items');
+      if (chunk.data.length > 0) {
+        this.debug('First: ' + JSON.stringify(chunk.data[0]));
+      }
+
+      if (chunk.type === 'graph') {
+        for (var i = 0; i < chunk.data.length; i++) {
+          this.graphVectors.push(chunk.data[i]);
+        }
+        this.graphVectors.sort(function(a, b) {
+          return a.t - b.t;
+        });
+        this.renderGraph();
+        this.log('📊 Graph vectors: ' + this.graphVectors.length);
+      } else if (chunk.type === 'volume') {
+        for (var i = 0; i < chunk.data.length; i++) {
+          this.volumeVectors.push(chunk.data[i]);
+        }
+        this.totalFrames = chunk.totalFrames;
+        this.log('🌀 Volume vectors: ' + this.volumeVectors.length);
+        if (this.chunkCounter === undefined) this.chunkCounter = 0;
+        this.chunkCounter++;
+        if (this.chunkCounter % 5 === 0 || chunk.data.length < 500) {
+          this.buildVolumeTexture();
+        }
+      }
+    };
+
+    Client.prototype.renderGraph = function() {
+      if (this.graphVectors.length < 2) return;
+
+      var svg = document.getElementById('svg');
+      var times = [], prices = [];
+      for (var i = 0; i < this.graphVectors.length; i++) {
+        times.push(this.graphVectors[i].x);
+        prices.push(this.graphVectors[i].y);
+      }
+
+      var tMin = Math.min.apply(null, times);
+      var tMax = Math.max.apply(null, times);
+      var pMin = Math.min.apply(null, prices);
+      var pMax = Math.max.apply(null, prices);
+      var width = svg.clientWidth;
+      var height = svg.clientHeight;
+
+      var x = function(t) { return ((t - tMin) / (tMax - tMin)) * width; };
+      var y = function(p) { return height - ((p - pMin) / (pMax - pMin)) * height; };
+
+      var pathData = 'M ' + x(this.graphVectors[0].x) + ' ' + y(this.graphVectors[0].y);
+      for (var i = 0; i < this.graphVectors.length - 1; i++) {
+        var p0 = i === 0 ? this.graphVectors[0] : this.graphVectors[i-1];
+        var p1 = this.graphVectors[i];
+        var p2 = this.graphVectors[i+1];
+        var p3 = i === this.graphVectors.length - 2 ? this.graphVectors[i+1] : this.graphVectors[i+2];
+        var tension = 0.5;
+        var xc1 = x(p1.x) + tension * (x(p2.x) - x(p0.x)) / 2;
+        var yc1 = y(p1.y) + tension * (y(p2.y) - y(p0.y)) / 2;
+        var xc2 = x(p2.x) - tension * (x(p3.x) - x(p1.x)) / 2;
+        var yc2 = y(p2.y) - tension * (y(p3.y) - y(p1.y)) / 2;
+        pathData += ' C ' + xc1 + ' ' + yc1 + ', ' + xc2 + ' ' + yc2 + ', ' + x(p2.x) + ' ' + y(p2.y);
+      }
+
+      svg.innerHTML = '';
+      var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', pathData);
+      path.setAttribute('fill', 'none');
+      path.setAttribute('stroke', '#00ffaa');
+      path.setAttribute('stroke-width', '2');
+      svg.appendChild(path);
+      document.getElementById('chart').querySelector('.loader').style.display = 'none';
+    };
+
+    // ======================
+    // INIT
+    // ======================
+    var server = new Server();
+    var client = new Client();
+
+    server.onChunkReady = function(chunk) {
+      client.receiveChunk(chunk);
+    };
+
+    server.onComplete = function() {
+      document.getElementById('startStreamBtn').disabled = false;
+    };
+
+    function setProgress(id, value) {
+      document.getElementById(id).style.width = (value * 100) + '%';
+    }
+
+    // GRAPH
+    document.getElementById('loadGraphBtn').addEventListener('click', function() {
+      var format = document.getElementById('graphFormat').value;
+      var fileInput = document.getElementById('graphFile');
+      if (fileInput.files.length > 0) {
+        server.loadGraphData(fileInput.files[0], format, function(p) {
+          setProgress('graphProgress', p);
+        }, function(err) {
+          if (err) {
+            server.log('❌ ' + err.message);
+          } else {
+            server.encodeGraphToVectors();
+            document.getElementById('startStreamBtn').disabled = false;
+          }
+        });
+      } else {
+        server.loadGraphData('./samplebtc.csv', format, function(p) {
+          setProgress('graphProgress', p);
+        }, function(err) {
+          if (err) {
+            server.log('⚠️ Using fallback data');
+            server.graphData = [
+              [1717000000000, 68000],
+              [1717000060000, 68050],
+              [1717000120000, 67980],
+              [1717000180000, 68100],
+              [1717000240000, 68150]
+            ];
+            server.encodeGraphToVectors();
+            document.getElementById('startStreamBtn').disabled = false;
+          } else {
+            server.encodeGraphToVectors();
+            document.getElementById('startStreamBtn').disabled = false;
+          }
+        });
+      }
+    });
+
+    // MEDIA
+    document.getElementById('loadMediaBtn').addEventListener('click', function() {
+      var format = document.getElementById('mediaFormat').value;
+      var url = document.getElementById('mediaUrl').value.trim();
+      if (!url) {
+        alert('Enter URL or upload file');
+        return;
+      }
+      server.loadMediaData(url, format, function(p) {
+        setProgress('mediaProgress', p);
+      }, function(err) {
+        if (err) {
+          server.log('❌ ' + err.message);
+        }
+      });
+    });
+
+    // DOWNLOADS
+    document.getElementById('downloadGraphDerivatives').addEventListener('click', function() {
+      if (!server.derivativeVectors || server.derivativeVectors.length === 0) {
+        server.log('No data to download');
+        return;
+      }
+      var dataStr = 'text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(server.derivativeVectors, null, 2));
+      var link = document.createElement('a');
+      link.setAttribute('href', dataStr);
+      link.setAttribute('download', 'graph_derivatives.json');
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    });
+
+    document.getElementById('downloadMediaDerivatives').addEventListener('click', function() {
+      if (!server.volumeVectors || server.volumeVectors.length === 0) {
+        server.log('No data to download');
+        return;
+      }
+      var dataStr = 'text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(server.volumeVectors, null, 2));
+      var link = document.createElement('a');
+      link.setAttribute('href', dataStr);
+      link.setAttribute('download', 'media_derivatives.json');
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    });
+
+    // CONTROLS
+    document.getElementById('startStreamBtn').addEventListener('click', function() {
+      server.prepareStream();
+      server.startStreaming();
+      this.disabled = true;
+    });
+
+    document.getElementById('resetStreamBtn').addEventListener('click', function() {
+      if (server.streamInterval) clearInterval(server.streamInterval);
+      client.graphVectors = [];
+      client.volumeVectors = [];
+      client.currentFrame = 0;
+      client.rotation = 0;
+      client.volumeTexture = null;
+      document.getElementById('svg').innerHTML = '';
+      document.getElementById('chart').querySelector('.loader').style.display = 'block';
+      document.getElementById('volumeCanvasContainer').querySelector('.loader').style.display = 'block';
+      server.log('🔁 Reset');
+      client.log('Reset');
+    });
+
+    document.getElementById('playPauseBtn').addEventListener('click', function() {
+      client.isPlaying = !client.isPlaying;
+      this.textContent = client.isPlaying ? '⏸️ Pause' : '▶️ Play';
+    });
+
+    document.getElementById('rotateBtn').addEventListener('click', function() {
+      client.autoRotate = !client.autoRotate;
+      this.textContent = client.autoRotate ? '⏹️ Stop Rotate' : '🔄 Auto-Rotate';
+    });
+
+    document.getElementById('timeSlider').addEventListener('input', function(e) {
+      client.currentFrame = (e.target.value / 100) * (client.totalFrames || 100);
+    });
+  </script>
+</body>
+</html>
